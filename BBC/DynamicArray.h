@@ -1,0 +1,122 @@
+#pragma once
+
+#include <cstdint>
+#include <type_traits>
+#include <memory>
+
+#include "ForwardArgConstructionHelper.h"
+
+#include "HeapBlock.h"
+
+namespace BBC{
+	
+	template<typename T, auto ResizeFunc>//, bool AllocateAtLeast = true> 
+	struct RuntimeArray{
+		//low priority -
+		//  use template sfinae or some other thing to abstract allocator::allocate and allocaotr::allocate_at_least
+
+		HeapBlock<T> heap;
+
+	public:
+
+		std::size_t Size() const {
+			return heap.Size();
+		}
+		T* Data() {
+			return heap.GetMemory();
+		}
+		T const* Data() const {
+			return heap.GetMemory();
+		}
+
+		void ClearAndResize(std::size_t elementCount) {
+			heap.DestroyAll();
+			heap.Resize(elementCount);
+			heap.ConstructAll();
+		}
+
+		template<typename... Args>
+			requires std::is_constructible_v<T, Args...>
+		void ClearAndResize(std::size_t elementCount, Args&&... args) {
+			heap.DestroyAll();
+			heap.Resize(elementCount);
+			heap.ConstructAll(std::forward<Args>(args)...);
+		}
+
+		template<std::size_t... Offsets, typename... Args>
+		void ClearAndResize(ArgumentPack_ConstructionHelper<Offsets...> helper, Args&&... args) {
+			heap.DestroyAll();
+			heap.Resize(helper.object_count);
+			heap.ConstructAll(helper, std::forward<Args>(args)...);
+		}
+
+		[[nodiscard]] explicit RuntimeArray(std::size_t elementCount)
+			requires std::is_default_constructible_v<T>
+			: heap{elementCount}
+		{
+			if (elementCount > 0) {
+				heap.ConstructAll();
+			}
+		}
+		
+		template<typename... Args>
+			requires std::is_constructible_v<T, Args...>
+		[[nodiscard]] explicit RuntimeArray(std::size_t elementCount, Args&&... args)
+			: heap{elementCount}
+		{
+			if (elementCount > 0) {
+				heap.ConstructAll(std::forward<Args>(args)...);
+			}
+		}
+		
+		//we would prefer if helper got optimized away. potentially worth taking a micro-optimization glance at
+		template<std::size_t... Offsets, typename... Args>
+		[[nodiscard]] explicit RuntimeArray(ArgumentPack_ConstructionHelper<Offsets...> helper, Args&&... args)
+		: heap{ ArgumentPack_ConstructionHelper<Offsets...>::object_count}
+		{
+			heap.ConstructAll(helper, std::forward<Args>(args)...);
+		}
+
+		//this could be copying, it could be conversion/inheritance (like how imageview can be constructed only from image)
+		template<typename Other>
+			requires std::is_constructible_v<T, Other&>
+		[[nodiscard]] explicit RuntimeArray(RuntimeArray<Other>& other)
+			: heap(other.heap.size)
+		{
+			for (std::size_t i = 0; i < heap.size; ++i) {
+				std::construct_at(
+					heap.GetMemory() + i,
+					other.heap[i]
+				);
+			}
+		}
+		
+		~RuntimeArray() { heap.DestroyAll(); }
+		
+		RuntimeArray(RuntimeArray const& copySrc) = delete;
+		RuntimeArray& operator=(RuntimeArray const& copySrc) = delete;
+		
+		RuntimeArray(RuntimeArray&& moveSrc) noexcept
+			: heap{ std::move(moveSrc.heap) }
+		{}
+
+		RuntimeArray& operator=(RuntimeArray&& moveSrc) noexcept = delete;
+		
+		T& operator[](std::size_t i) noexcept { 
+			assert(i < Size());
+			return heap[i]; 
+		}
+        T const& operator[](std::size_t i) const noexcept {
+			assert(i < Size());
+			return heap[i]; 
+		}
+		
+		T* begin() noexcept {return heap.begin();}
+		T* end() noexcept {return heap.end();}
+		
+		T const* cbegin() const noexcept {return heap.cbegin();}
+		T const* cend() const noexcept {return heap.cend();}
+		T const* begin() const noexcept {return heap.begin();}
+		T const* end() const noexcept {return heap.end();}
+	};
+}
